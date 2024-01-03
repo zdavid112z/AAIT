@@ -1,0 +1,72 @@
+trainer:
+  max_epochs: 100
+  accumulate_grad_batches: 1
+  num_sanity_val_steps: 2
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      project: aait_imrec
+      log_model: false
+  log_every_n_steps: 50
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: ./checkpoints
+        auto_insert_metric_name: false
+        filename: "epoch={epoch}_step={step}_val_0_loss={val_0/loss:.4f}"
+        save_last: false
+        save_top_k: 100
+        every_n_epochs: 1
+        monitor: val_0/loss
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: classification_callback.ClassificationCallback
+      init_args:
+        datamodule:
+          class_path: datamodules.Task1Datamodule
+          init_args:
+            path: C:/Data/AAIT/task1
+            batch_size: 128
+            num_train_workers: 6
+            num_val_workers: 6
+            labeled: true
+            unlabeled: false
+            no_train_augmentations: true
+        early_stopping: 10
+        max_depth: 6
+        n_estimators: 100
+        pca_n_components: -1
+        val_n_splits: 5
+        val_n_repeats: 10
+        xgb_device: cuda
+        every_n_epochs: 1
+        skip_sanity_check: false
+
+model:
+  class_path: models.ByolModel
+  init_args:
+    base_tau: 0.99
+    mlp_hidden_size: 4096
+    mlp_out_size: 256
+    lr: 1e-3
+    weight_decay: 1.5e-6
+    warmup_epochs: 10
+    backbone:
+      class_path: models.TimmModel
+      init_args:
+        model_name: resnet50
+        pretrained: false
+
+data:
+  class_path: datamodules.Task1Datamodule
+  init_args:
+    path: C:/Data/AAIT/task1
+    batch_size: 128
+    num_train_workers: 6
+    num_val_workers: 6
+    num_test_workers: 6
+    labeled: true
+    unlabeled: true
+    val_size: 0.2
+    byol: true
