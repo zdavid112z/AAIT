@@ -71,10 +71,11 @@ class ImageDataset(Dataset):
             )
             labels_df = labels_df.set_index("sample_name")
             self.data = [
-                (x, int(labels_df.loc[x.name]["label"])) for x in folder_path.iterdir()
+                (x, int(labels_df.loc[x.name]["label"]))
+                for x in sorted(folder_path.iterdir())
             ]
         else:
-            self.data = [(x, -1) for x in folder_path.iterdir()]
+            self.data = [(x, -1) for x in sorted(folder_path.iterdir())]
 
     def __len__(self):
         return len(self.data)
@@ -98,6 +99,8 @@ class Task1Datamodule(LightningDataModule):
         byol: bool = False,
         dino: bool = False,
         train_dataset_replicas: int = 1,
+        resize_img_to: int = 64,
+        model_img_size: int = 56,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -132,7 +135,7 @@ class Task1Datamodule(LightningDataModule):
                 return v2.Compose(
                     [
                         v2.RandomResizedCrop(
-                            56,
+                            self.hparams.model_img_size,
                             scale=(0.2, 1.0),
                             interpolation=v2.InterpolationMode.BICUBIC,
                             antialias=True,
@@ -164,30 +167,70 @@ class Task1Datamodule(LightningDataModule):
             self.val_transform = {
                 "pair_0": byol_transform(blur_p=1, solarization_p=0),
                 "pair_1": byol_transform(blur_p=0.1, solarization_p=0.2),
-                "image": v2.CenterCrop(56),
+                "image": v2.Compose(
+                    [
+                        v2.Resize(
+                            self.hparams.resize_img_to,
+                            interpolation=v2.InterpolationMode.BICUBIC,
+                            antialias=True,
+                        ),
+                        v2.CenterCrop(self.hparams.model_img_size),
+                    ]
+                ),
             }
         else:
             if self.hparams.no_train_augmentations:
                 self.train_transform = {
-                    "image": v2.CenterCrop(56),
+                    "image": v2.Compose(
+                        [
+                            v2.Resize(
+                                self.hparams.resize_img_to,
+                                interpolation=v2.InterpolationMode.BICUBIC,
+                                antialias=True,
+                            ),
+                            v2.CenterCrop(self.hparams.model_img_size),
+                        ]
+                    ),
                 }
             else:
                 self.train_transform = {
                     "image": v2.Compose(
                         [
                             v2.RandomResizedCrop(
-                                56,
-                                scale=(0.2, 1.0),
+                                self.hparams.model_img_size,
+                                scale=(0.4, 1.0),
                                 interpolation=v2.InterpolationMode.BICUBIC,
                                 antialias=True,
                             ),
                             v2.RandomHorizontalFlip(p=0.5),
+                            v2.RandomApply(
+                                [
+                                    v2.ColorJitter(
+                                        brightness=0.4,
+                                        contrast=0.4,
+                                        saturation=0.2,
+                                        hue=0.1,
+                                    )
+                                ],
+                                p=0.2,
+                            ),
+                            v2.RandomGrayscale(p=0.1),
+                            v2.RandomSolarize(128, p=0.1),
                         ]
                     )
                 }
 
             self.val_transform = {
-                "image": v2.CenterCrop(56),
+                "image": v2.Compose(
+                    [
+                        v2.Resize(
+                            self.hparams.resize_img_to,
+                            interpolation=v2.InterpolationMode.BICUBIC,
+                            antialias=True,
+                        ),
+                        v2.CenterCrop(self.hparams.model_img_size),
+                    ]
+                ),
             }
 
         train_datasets = []
@@ -197,20 +240,26 @@ class Task1Datamodule(LightningDataModule):
                 folder_path=path / "train_data" / "images" / "labeled",
                 labels_csv_path=path / "train_data" / "annotations.csv",
             )
-            labeled_train, labeled_val = train_test_split(
-                labeled_dataset, random_state=42, test_size=self.hparams.val_size
-            )
-            train_datasets.append(labeled_train)
-            val_datasets.append(labeled_val)
+            if self.hparams.val_size > 0:
+                labeled_train, labeled_val = train_test_split(
+                    labeled_dataset, random_state=42, test_size=self.hparams.val_size
+                )
+                train_datasets.append(labeled_train)
+                val_datasets.append(labeled_val)
+            else:
+                train_datasets.append(labeled_dataset)
         if self.hparams.unlabeled:
             unlabeled_dataset = ImageDataset(
                 folder_path=path / "train_data" / "images" / "unlabeled",
             )
-            unlabeled_train, unlabeled_val = train_test_split(
-                unlabeled_dataset, random_state=42, test_size=self.hparams.val_size
-            )
-            train_datasets.append(unlabeled_train)
-            val_datasets.append(unlabeled_val)
+            if self.hparams.val_size > 0:
+                unlabeled_train, unlabeled_val = train_test_split(
+                    unlabeled_dataset, random_state=42, test_size=self.hparams.val_size
+                )
+                train_datasets.append(unlabeled_train)
+                val_datasets.append(unlabeled_val)
+            else:
+                train_datasets.append(unlabeled_dataset)
 
         train_dataset = ConcatDataset(train_datasets)
         train_dataset = ConcatDataset(

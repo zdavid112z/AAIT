@@ -15,6 +15,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import RepeatedStratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import compute_sample_weight
+from tqdm import tqdm
 
 import models
 from datamodules import Task1Datamodule
@@ -88,7 +89,7 @@ class ClassificationCallback(pl.Callback):
             y_train,
             eval_set=[(X_test_transformed, y_test)],
             sample_weight=sample_weights,
-            verbose=True,
+            verbose=False,
         )
 
         y_score = xgb.predict_proba(X_test_transformed)
@@ -106,7 +107,9 @@ class ClassificationCallback(pl.Callback):
             n_repeats=self.val_n_repeats, n_splits=self.val_n_splits
         )
         results = []
-        for train_index, test_index in kfold.split(X, y):
+        for train_index, test_index in tqdm(
+            kfold.split(X, y), total=self.val_n_splits * self.val_n_repeats
+        ):
             X_train = X[train_index, :]
             X_test = X[test_index, :]
             y_train = y[train_index]
@@ -124,12 +127,12 @@ class ClassificationCallback(pl.Callback):
             | compute_stat(results, "max", np.max)
         )
 
-    def on_validation_epoch_end(
+    def on_train_epoch_start(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ):
-        if trainer.sanity_checking and self.skip_sanity_check:
+        if trainer.current_epoch == 0 and self.skip_sanity_check:
             return
-        if (trainer.current_epoch + 1) % self.every_n_epochs != 0:
+        if trainer.current_epoch % self.every_n_epochs != 0:
             return
 
         if isinstance(pl_module, models.ByolModel):

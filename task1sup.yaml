@@ -1,5 +1,5 @@
 trainer:
-  max_epochs: -1
+  max_epochs: 50
   accumulate_grad_batches: 1
   num_sanity_val_steps: 2
   logger:
@@ -7,15 +7,15 @@ trainer:
     init_args:
       project: aait_imrec
       log_model: false
-  log_every_n_steps: 50
+  log_every_n_steps: 20
   callbacks:
     - class_path: lightning.pytorch.callbacks.ModelCheckpoint
       init_args:
         dirpath: ./checkpoints
         auto_insert_metric_name: false
         filename: "epoch={epoch}_step={step}_val_0_loss={val_0/loss:.4f}"
-        save_last: false
-        save_top_k: 100
+        save_last: true
+        save_top_k: 5
         every_n_epochs: 1
         monitor: val_0/loss
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
@@ -28,32 +28,27 @@ model:
     backbone:
       class_path: models.TimmModel
       init_args:
-        model_name: resnet50
-        pretrained: false
+        model_name: efficientnetv2_s
+#        byol_ckpt_path: checkpoints_byol/last.ckpt
+        timm_ckpt_path: /home/doved/Downloads/checkpoint-224.pth.tar
+#        pretrained: true
+    unfreeze_backbone_at_epoch: 20
+    warmup_epochs: 10
+    lr: 0.001
+    weight_decay: 0
 
 data:
   class_path: datamodules.Task1Datamodule
   init_args:
-    path: C:/Data/AAIT/task1
-    batch_size: 256
-    num_workers: 0
+    path: /home/doved/Data/AAIT/task1
+    batch_size: 1024
+    num_train_workers: 8
+    num_val_workers: 8
+    num_test_workers: 8
     labeled: true
     unlabeled: false
     val_size: 0.2
-
-optimizer:
-  class_path: torch.optim.AdamW
-  init_args:
-    lr: 0.0003
-
-#lr_scheduler:
-#  class_path: torch.optim.lr_scheduler.CosineAnnealingWarmRestarts
-#  init_args:
-#    T_0: 1
-#    T_mult: 2
-
-lr_scheduler:
-  class_path: lightning.pytorch.cli.ReduceLROnPlateau
-  init_args:
-    monitor: val_0/loss
-    patience: 10
+    train_dataset_replicas: 5
+    no_train_augmentations: true
+#    resize_img_to: 256
+#    model_img_size: 224

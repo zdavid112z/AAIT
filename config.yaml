@@ -1,11 +1,11 @@
-# lightning.pytorch==2.0.6
-seed_everything: 100700818
+# lightning.pytorch==2.1.2
+seed_everything: 3576777919
 trainer:
   accelerator: auto
   strategy: auto
   devices: auto
   num_nodes: 1
-  precision: 32-true
+  precision: null
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
     init_args:
@@ -47,8 +47,8 @@ trainer:
       filename: epoch={epoch}_step={step}_val_0_loss={val_0/loss:.4f}
       monitor: val_0/loss
       verbose: false
-      save_last: false
-      save_top_k: 100
+      save_last: true
+      save_top_k: 5
       save_weights_only: false
       mode: min
       auto_insert_metric_name: false
@@ -56,38 +56,14 @@ trainer:
       train_time_interval: null
       every_n_epochs: 1
       save_on_train_epoch_end: null
+      enable_version_counter: true
   - class_path: lightning.pytorch.callbacks.LearningRateMonitor
     init_args:
-      logging_interval: epoch
+      logging_interval: step
       log_momentum: false
-  - class_path: classification_callback.ClassificationCallback
-    init_args:
-      datamodule:
-        class_path: datamodules.Task1Datamodule
-        init_args:
-          path: C:/Data/AAIT/task1
-          num_train_workers: 6
-          num_val_workers: 6
-          num_test_workers: 2
-          batch_size: 128
-          labeled: true
-          unlabeled: false
-          val_size: 0.2
-          no_train_augmentations: true
-          byol: false
-          dino: false
-          train_dataset_replicas: 1
-      early_stopping: 10
-      max_depth: 6
-      n_estimators: 100
-      pca_n_components: -1
-      val_n_splits: 5
-      val_n_repeats: 10
-      xgb_device: cuda
-      every_n_epochs: 1
-      skip_sanity_check: false
+      log_weight_decay: false
   fast_dev_run: false
-  max_epochs: 100
+  max_epochs: 50
   min_epochs: null
   max_steps: -1
   min_steps: null
@@ -100,7 +76,7 @@ trainer:
   val_check_interval: null
   check_val_every_n_epoch: 1
   num_sanity_val_steps: 2
-  log_every_n_steps: 50
+  log_every_n_steps: 20
   enable_checkpointing: null
   enable_progress_bar: null
   enable_model_summary: null
@@ -120,33 +96,35 @@ trainer:
   default_root_dir: null
 ckpt_path: null
 model:
-  class_path: models.ByolModel
+  class_path: models.SupervisedModel
   init_args:
     backbone:
       class_path: models.TimmModel
       init_args:
-        model_name: resnet50
+        model_name: efficientnetv2_s
         pretrained: false
         model: null
-        ckpt_path: null
-    base_tau: 0.99
-    mlp_hidden_size: 4096
-    mlp_out_size: 256
-    lr: 0.001
-    weight_decay: 1.5e-06
+        byol_ckpt_path: null
+        timm_ckpt_path: /home/doved/Downloads/checkpoint-224.pth.tar
+    unfreeze_backbone_at_epoch: 20
     warmup_epochs: 10
+    lr: 0.001
+    momentum: 0.9
+    weight_decay: 0.0
 data:
   class_path: datamodules.Task1Datamodule
   init_args:
-    path: C:/Data/AAIT/task1
-    num_train_workers: 6
-    num_val_workers: 2
-    num_test_workers: 2
-    batch_size: 128
+    path: /home/doved/Data/AAIT/task1
+    num_train_workers: 8
+    num_val_workers: 8
+    num_test_workers: 8
+    batch_size: 1024
     labeled: true
-    unlabeled: true
+    unlabeled: false
     val_size: 0.2
-    no_train_augmentations: false
-    byol: true
+    no_train_augmentations: true
+    byol: false
     dino: false
-    train_dataset_replicas: 1
+    train_dataset_replicas: 5
+    resize_img_to: 64
+    model_img_size: 56

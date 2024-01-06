@@ -1,6 +1,6 @@
 trainer:
   max_epochs: 100
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 2
   num_sanity_val_steps: 2
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
@@ -13,34 +13,34 @@ trainer:
       init_args:
         dirpath: ./checkpoints
         auto_insert_metric_name: false
-        filename: "epoch={epoch}_step={step}_val_0_loss={val_0/loss:.4f}"
-        save_last: false
-        save_top_k: 100
-        every_n_epochs: 1
-        monitor: val_0/loss
+        filename: "epoch={epoch}_step={step}_acc_mean={classification/acc_mean:.4f}"
+        save_last: true
+        save_top_k: 20
+        every_n_epochs: 5
+        monitor: classification/acc_mean
     - class_path: lightning.pytorch.callbacks.LearningRateMonitor
       init_args:
-        logging_interval: epoch
+        logging_interval: step
     - class_path: classification_callback.ClassificationCallback
       init_args:
         datamodule:
           class_path: datamodules.Task1Datamodule
           init_args:
-            path: C:/Data/AAIT/task1
-            batch_size: 128
-            num_train_workers: 6
-            num_val_workers: 6
+            path: /home/doved/Data/AAIT/task1
+            batch_size: 64
+            num_train_workers: 0
+            num_val_workers: 0
             labeled: true
             unlabeled: false
             no_train_augmentations: true
         early_stopping: 10
-        max_depth: 6
+        max_depth: 4
         n_estimators: 100
-        pca_n_components: -1
+        pca_n_components: 256
         val_n_splits: 5
-        val_n_repeats: 10
+        val_n_repeats: 5
         xgb_device: cuda
-        every_n_epochs: 1
+        every_n_epochs: 5
         skip_sanity_check: false
 
 model:
@@ -49,24 +49,25 @@ model:
     base_tau: 0.99
     mlp_hidden_size: 4096
     mlp_out_size: 256
-    lr: 1e-3
+    lr: 3e-4
     weight_decay: 1.5e-6
     warmup_epochs: 10
     backbone:
       class_path: models.TimmModel
       init_args:
         model_name: resnet50
-        pretrained: false
+        pretrained: true
 
 data:
   class_path: datamodules.Task1Datamodule
   init_args:
-    path: C:/Data/AAIT/task1
-    batch_size: 128
-    num_train_workers: 6
-    num_val_workers: 6
-    num_test_workers: 6
+    path: /home/doved/Data/AAIT/task1
+    batch_size: 512
+    num_train_workers: 4
+    num_val_workers: 4
+    num_test_workers: 4
     labeled: true
     unlabeled: true
-    val_size: 0.2
+    val_size: 0
     byol: true
+    train_dataset_replicas: 3
