@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import pandas as pd
 import torch
@@ -16,6 +16,10 @@ def read_image(path):
     return torchvision.io.read_image(str(path))
 
 
+def read_image_no_cache(path):
+    return torchvision.io.read_image(str(path))
+
+
 class TransformDataset:
     def __init__(self, dataset, transforms, final_transforms_to_all):
         self.dataset = dataset
@@ -26,10 +30,21 @@ class TransformDataset:
         return len(self.dataset)
 
     def __getitem__(self, i):
-        image_path, label = self.dataset[i]
-        image = read_image(image_path)
+        item = self.dataset[i]
+        lq_image_path = item["lq_image_path"]
+        label = item["label"]
+        lq_image = read_image(lq_image_path)
+
+        hq_image = None
+        if "hq_image_path" in item:
+            hq_image_path = item["hq_image_path"]
+            hq_image = read_image_no_cache(hq_image_path)
         return {
-            k: self.final_transforms_to_all(t(image))
+            k: (
+                self.final_transforms_to_all(t(lq_image))
+                if not k.endswith("_hq")
+                else self.final_transforms_to_all(t(hq_image))
+            )
             for k, t in self.transforms.items()
         }, label
 
@@ -60,7 +75,8 @@ class ImageDataset(Dataset):
     def __init__(
         self,
         folder_path: Union[str, Path],
-        labels_csv_path: Union[str, Path] = None,
+        hq_folder_path: Optional[Union[str, Path]] = None,
+        labels_csv_path: Optional[Union[str, Path]] = None,
     ):
         super().__init__()
         folder_path = Path(folder_path)
@@ -71,11 +87,31 @@ class ImageDataset(Dataset):
             )
             labels_df = labels_df.set_index("sample_name")
             self.data = [
-                (x, int(labels_df.loc[x.name]["label"]))
+                {
+                    "lq_image_path": x,
+                    "label": int(labels_df.loc[x.name]["label"]),
+                }
                 for x in sorted(folder_path.iterdir())
             ]
         else:
-            self.data = [(x, -1) for x in sorted(folder_path.iterdir())]
+            self.data = [
+                {
+                    "lq_image_path": x,
+                    "label": -1,
+                }
+                for x in sorted(folder_path.iterdir())
+            ]
+        if hq_folder_path is not None:
+            hq_folder_path = Path(hq_folder_path)
+            self.data = [
+                {
+                    "lq_image_path": item["lq_image_path"],
+                    "hq_image_path": hq_folder_path
+                    / item["lq_image_path"].with_suffix(".png").name,
+                    "label": item["label"],
+                }
+                for item in self.data
+            ]
 
     def __len__(self):
         return len(self.data)
@@ -88,6 +124,8 @@ class Task1Datamodule(LightningDataModule):
     def __init__(
         self,
         path: str = "C:/Data/AAIT/task1",
+        hq_path: str = "C:/Data/AAIT_upsampled/task1",
+        load_hq_images: bool = False,
         num_train_workers: int = 4,
         num_val_workers: int = 2,
         num_test_workers: int = 2,
@@ -97,16 +135,16 @@ class Task1Datamodule(LightningDataModule):
         val_size: float = 0.2,
         no_train_augmentations: bool = False,
         byol: bool = False,
-        dino: bool = False,
         train_dataset_replicas: int = 1,
-        resize_img_to: int = 64,
-        model_img_size: int = 56,
     ):
         super().__init__()
         self.save_hyperparameters()
         assert (
-            sum([no_train_augmentations, byol, dino]) <= 1
+            sum([no_train_augmentations, byol]) <= 1
         ), "At most one of 'no_train_augmentations', 'byol' and 'dino' can be enabled"
+        assert (
+            not load_hq_images or not byol
+        ), "Dual lq-hq data not implemented for BYOL"
         self.train_transform = None
         self.val_transform = None
         self.train_dataset = None
@@ -118,6 +156,9 @@ class Task1Datamodule(LightningDataModule):
     def setup(self, stage: str):
         self.collator = Collator()
         path = Path(self.hparams.path)
+        hq_path = (
+            Path(self.hparams.hq_path) if self.hparams.hq_path is not None else None
+        )
 
         self.final_transforms = v2.Compose(
             [
@@ -127,15 +168,13 @@ class Task1Datamodule(LightningDataModule):
             ]
         )
 
-        if self.hparams.dino:
-            raise Exception("not supported yet")
-        elif self.hparams.byol:
+        if self.hparams.byol:
 
             def byol_transform(blur_p: float, solarization_p: float):
                 return v2.Compose(
                     [
                         v2.RandomResizedCrop(
-                            self.hparams.model_img_size,
+                            56,
                             scale=(0.2, 1.0),
                             interpolation=v2.InterpolationMode.BICUBIC,
                             antialias=True,
@@ -167,37 +206,20 @@ class Task1Datamodule(LightningDataModule):
             self.val_transform = {
                 "pair_0": byol_transform(blur_p=1, solarization_p=0),
                 "pair_1": byol_transform(blur_p=0.1, solarization_p=0.2),
-                "image": v2.Compose(
-                    [
-                        v2.Resize(
-                            self.hparams.resize_img_to,
-                            interpolation=v2.InterpolationMode.BICUBIC,
-                            antialias=True,
-                        ),
-                        v2.CenterCrop(self.hparams.model_img_size),
-                    ]
-                ),
+                "image": v2.CenterCrop(56),
             }
         else:
             if self.hparams.no_train_augmentations:
-                self.train_transform = {
-                    "image": v2.Compose(
-                        [
-                            v2.Resize(
-                                self.hparams.resize_img_to,
-                                interpolation=v2.InterpolationMode.BICUBIC,
-                                antialias=True,
-                            ),
-                            v2.CenterCrop(self.hparams.model_img_size),
-                        ]
-                    ),
-                }
+                self.train_transform = {"image": v2.CenterCrop(56)}
+                if self.hparams.load_hq_images:
+                    self.train_transform["image_hq"] = v2.CenterCrop(224)
             else:
-                self.train_transform = {
-                    "image": v2.Compose(
+
+                def gen_train_transform(img_size: int):
+                    return v2.Compose(
                         [
                             v2.RandomResizedCrop(
-                                self.hparams.model_img_size,
+                                img_size,
                                 scale=(0.4, 1.0),
                                 interpolation=v2.InterpolationMode.BICUBIC,
                                 antialias=True,
@@ -218,26 +240,27 @@ class Task1Datamodule(LightningDataModule):
                             v2.RandomSolarize(128, p=0.1),
                         ]
                     )
+
+                self.train_transform = {
+                    "image": gen_train_transform(56),
                 }
+                if self.hparams.load_hq_images:
+                    self.train_transform["image_hq"] = gen_train_transform(224)
 
             self.val_transform = {
-                "image": v2.Compose(
-                    [
-                        v2.Resize(
-                            self.hparams.resize_img_to,
-                            interpolation=v2.InterpolationMode.BICUBIC,
-                            antialias=True,
-                        ),
-                        v2.CenterCrop(self.hparams.model_img_size),
-                    ]
-                ),
+                "image": v2.CenterCrop(56),
             }
+            if self.hparams.load_hq_images:
+                self.val_transform["image_hq"] = v2.CenterCrop(224)
 
         train_datasets = []
         val_datasets = []
         if self.hparams.labeled:
             labeled_dataset = ImageDataset(
                 folder_path=path / "train_data" / "images" / "labeled",
+                hq_folder_path=hq_path / "train_data" / "images" / "labeled"
+                if hq_path is not None and self.hparams.load_hq_images
+                else None,
                 labels_csv_path=path / "train_data" / "annotations.csv",
             )
             if self.hparams.val_size > 0:
@@ -251,6 +274,9 @@ class Task1Datamodule(LightningDataModule):
         if self.hparams.unlabeled:
             unlabeled_dataset = ImageDataset(
                 folder_path=path / "train_data" / "images" / "unlabeled",
+                hq_folder_path=hq_path / "train_data" / "images" / "unlabeled"
+                if hq_path is not None and self.hparams.load_hq_images
+                else None,
             )
             if self.hparams.val_size > 0:
                 unlabeled_train, unlabeled_val = train_test_split(
@@ -268,6 +294,9 @@ class Task1Datamodule(LightningDataModule):
 
         test_dataset = ImageDataset(
             folder_path=path / "val_data",
+            hq_folder_path=hq_path / "val_data"
+            if hq_path is not None and self.hparams.load_hq_images
+            else None,
         )
 
         self.train_dataset = TransformDataset(

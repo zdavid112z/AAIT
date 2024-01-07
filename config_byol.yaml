@@ -61,7 +61,7 @@ model:
 data:
   class_path: datamodules.Task1Datamodule
   init_args:
-    path: /home/doved/Data/AAIT/task1
+    path: AAIT/task1
     batch_size: 512
     num_train_workers: 4
     num_val_workers: 4

@@ -1,5 +1,5 @@
 # lightning.pytorch==2.1.2
-seed_everything: 3576777919
+seed_everything: 2455013651
 trainer:
   accelerator: auto
   strategy: auto
@@ -95,36 +95,74 @@ trainer:
   reload_dataloaders_every_n_epochs: 0
   default_root_dir: null
 ckpt_path: null
+verbose: true
 model:
   class_path: models.SupervisedModel
   init_args:
     backbone:
-      class_path: models.TimmModel
+      class_path: models.Ensemble
       init_args:
-        model_name: efficientnetv2_s
-        pretrained: false
-        model: null
-        byol_ckpt_path: null
-        timm_ckpt_path: /home/doved/Downloads/checkpoint-224.pth.tar
+        models:
+        - class_path: models.TimmModel
+          init_args:
+            model_name: efficientnetv2_s
+            pretrained: false
+            model: null
+            byol_ckpt_path: null
+            timm_ckpt_path: null
+            finetuned_ckpt_path: efficientnetv2_s.task1.final.ckpt
+            use_hq_images: false
+            task_number: 1
+        - class_path: models.TimmModel
+          init_args:
+            model_name: resnet50
+            pretrained: false
+            model: null
+            byol_ckpt_path: null
+            timm_ckpt_path: null
+            finetuned_ckpt_path: resnet50.lr01.task1.final.ckpt
+            use_hq_images: false
+            task_number: 1
+        - class_path: models.TimmModel
+          init_args:
+            model_name: vit_large_patch16_224
+            pretrained: true
+            model: null
+            byol_ckpt_path: null
+            timm_ckpt_path: null
+            finetuned_ckpt_path: null
+            use_hq_images: true
+            task_number: 1
+        - class_path: models.TimmModel
+          init_args:
+            model_name: vit_large_patch14_clip_224
+            pretrained: true
+            model: null
+            byol_ckpt_path: null
+            timm_ckpt_path: null
+            finetuned_ckpt_path: null
+            use_hq_images: true
+            task_number: 1
+        learnable_weights: false
     unfreeze_backbone_at_epoch: 20
-    warmup_epochs: 10
+    unfreeze_only_ensemble_weights: false
+    warmup_epochs: 5
     lr: 0.001
     momentum: 0.9
-    weight_decay: 0.0
+    weight_decay: 0.0001
 data:
   class_path: datamodules.Task1Datamodule
   init_args:
     path: /home/doved/Data/AAIT/task1
+    hq_path: /home/doved/Data/AAIT_upsampled/task1
+    load_hq_images: true
     num_train_workers: 8
     num_val_workers: 8
     num_test_workers: 8
-    batch_size: 1024
+    batch_size: 4
     labeled: true
     unlabeled: false
     val_size: 0.2
-    no_train_augmentations: true
+    no_train_augmentations: false
     byol: false
-    dino: false
-    train_dataset_replicas: 5
-    resize_img_to: 64
-    model_img_size: 56
+    train_dataset_replicas: 1

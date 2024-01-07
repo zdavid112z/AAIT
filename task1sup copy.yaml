@@ -1,6 +1,6 @@
 trainer:
   max_epochs: 50
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 2
   num_sanity_val_steps: 2
   logger:
     class_path: lightning.pytorch.loggers.WandbLogger
@@ -101,7 +101,7 @@ data:
     path: /home/doved/Data/AAIT/task2
     hq_path: /home/doved/Data/AAIT_upsampled/task2
     load_hq_images: false
-    batch_size: 512
+    batch_size: 1024
     num_train_workers: 8
     num_val_workers: 8
     num_test_workers: 8

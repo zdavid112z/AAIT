@@ -1,0 +1,76 @@
+trainer:
+  max_epochs: 50
+  accumulate_grad_batches: 1
+  num_sanity_val_steps: 2
+  logger:
+    class_path: lightning.pytorch.loggers.WandbLogger
+    init_args:
+      project: aait_imrec
+      log_model: false
+  log_every_n_steps: 20
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        dirpath: ./checkpoints
+        auto_insert_metric_name: false
+        filename: "epoch={epoch}_step={step}_val_0_loss={val_0/loss:.4f}"
+        save_last: true
+        save_top_k: 5
+        every_n_epochs: 1
+        monitor: val_0/loss
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: step
+
+model:
+  class_path: models.SupervisedModel
+  init_args:
+    backbone:
+      class_path: models.Ensemble
+      init_args:
+        learnable_weights: false
+        models:
+          - class_path: models.TimmModel
+            init_args:
+              model_name: efficientnetv2_s
+              finetuned_ckpt_path: efficientnetv2_s.task1.final.ckpt
+              pretrained: false
+              task_number: 1
+          - class_path: models.TimmModel
+            init_args:
+              model_name: resnet50
+              finetuned_ckpt_path: resnet50.lr01.task1.final.ckpt
+              pretrained: false
+              task_number: 1
+          - class_path: models.TimmModel
+            init_args:
+              model_name: vit_large_patch16_224
+              pretrained: true
+              use_hq_images: true
+              task_number: 1
+          - class_path: models.TimmModel
+            init_args:
+              model_name: vit_large_patch14_clip_224
+              pretrained: true
+              use_hq_images: true
+              task_number: 1
+
+    unfreeze_backbone_at_epoch: 20
+    warmup_epochs: 5
+    lr: 0.001
+    weight_decay: 0.0001
+
+data:
+  class_path: datamodules.Task1Datamodule
+  init_args:
+    path: AAIT/task1
+    hq_path: AAIT_upsampled/task1
+    load_hq_images: true
+    batch_size: 4
+    num_train_workers: 8
+    num_val_workers: 8
+    num_test_workers: 8
+    labeled: true
+    unlabeled: false
+    val_size: 0.2
+    train_dataset_replicas: 1

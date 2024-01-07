@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, List
 
 import lightning.pytorch as pl
 import numpy as np
@@ -7,17 +7,16 @@ import timm
 import timm.optim.lars
 import torch
 import torch.nn as nn
-from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torchmetrics import SumMetric
 from torchmetrics.classification.accuracy import MulticlassAccuracy
-from torchmetrics.classification.average_precision import MulticlassAveragePrecision
 from lightning.pytorch.core.optimizer import LightningOptimizer
+import torch.nn.functional as F
 
 import utils
 
 NUM_CLASSES = 100
 
-IMAGENET64_CLASSES = [
+TASK1_IMAGENET64_CLASSES = [
     633,
     974,
     542,
@@ -120,7 +119,7 @@ IMAGENET64_CLASSES = [
     569,
 ]
 
-IMAGENET_CLASSES = [
+TASK1_IMAGENET_CLASSES = [
     314,
     932,
     508,
@@ -223,6 +222,212 @@ IMAGENET_CLASSES = [
     758,
 ]
 
+TASK2_IMAGENET_CLASSES = [
+    347,
+    99,
+    779,
+    935,
+    301,
+    720,
+    967,
+    850,
+    329,
+    338,
+    707,
+    604,
+    621,
+    890,
+    845,
+    319,
+    406,
+    462,
+    323,
+    435,
+    924,
+    899,
+    568,
+    576,
+    421,
+    879,
+    605,
+    291,
+    950,
+    677,
+    951,
+    115,
+    281,
+    873,
+    963,
+    427,
+    149,
+    731,
+    445,
+    888,
+    146,
+    466,
+    61,
+    811,
+    471,
+    962,
+    398,
+    221,
+    492,
+    208,
+    557,
+    309,
+    682,
+    73,
+    463,
+    768,
+    909,
+    923,
+    387,
+    101,
+    645,
+    113,
+    294,
+    947,
+    235,
+    900,
+    313,
+    145,
+    973,
+    509,
+    853,
+    826,
+    874,
+    32,
+    786,
+    345,
+    929,
+    353,
+    488,
+    107,
+    122,
+    801,
+    988,
+    817,
+    836,
+    562,
+    128,
+    635,
+    687,
+    866,
+    808,
+    972,
+    437,
+    923,
+    365,
+    543,
+    467,
+    735,
+    573,
+    565,
+]
+
+TASK2_IMAGENET64_CLASSES = [
+    164,
+    419,
+    961,
+    733,
+    621,
+    900,
+    946,
+    785,
+    657,
+    100,
+    842,
+    524,
+    373,
+    935,
+    530,
+    638,
+    676,
+    850,
+    642,
+    883,
+    812,
+    818,
+    756,
+    235,
+    717,
+    219,
+    979,
+    189,
+    318,
+    584,
+    319,
+    654,
+    173,
+    677,
+    947,
+    904,
+    192,
+    377,
+    984,
+    681,
+    440,
+    886,
+    485,
+    514,
+    538,
+    805,
+    546,
+    116,
+    761,
+    175,
+    994,
+    629,
+    698,
+    604,
+    819,
+    875,
+    671,
+    792,
+    6,
+    213,
+    597,
+    652,
+    60,
+    745,
+    210,
+    794,
+    632,
+    439,
+    364,
+    707,
+    988,
+    527,
+    881,
+    500,
+    558,
+    107,
+    967,
+    11,
+    826,
+    646,
+    616,
+    506,
+    326,
+    273,
+    573,
+    711,
+    422,
+    531,
+    332,
+    288,
+    924,
+    358,
+    732,
+    753,
+    82,
+    999,
+    706,
+    854,
+    274,
+    255,
+]
+
 
 def reset_optimizer_state(optimizer):
     if isinstance(optimizer, LightningOptimizer):
@@ -242,7 +447,31 @@ def classifier_name(timm_model_name: str):
         return "fc"
     if "efficientnet" in timm_model_name:
         return "classifier"
-    raise Exception("¯\_(ツ)_/¯")
+    if "vit" in timm_model_name:
+        return "head"
+    return "fc"
+
+
+class Ensemble(nn.Module):
+    def __init__(self, models: List[nn.Module], learnable_weights: bool = False):
+        super().__init__()
+        self.models = nn.ModuleList(models)
+        self.ensemble_weights = nn.Parameter(
+            torch.zeros(len(models)), requires_grad=learnable_weights
+        )
+        self.classifiers = nn.ModuleList(
+            [model.get_classifier() for model in self.models]
+        )
+
+    def forward(self, images):
+        if len(self.models) == 1:
+            return self.models[0](images)
+        scores = torch.stack([model(images) for model in self.models], dim=0)
+        weights = F.softmax(self.ensemble_weights, dim=0).view(-1, 1, 1)
+        return torch.sum(scores * weights, dim=0)
+
+    def get_classifier(self):
+        return self.classifiers
 
 
 class TimmModel(nn.Module):
@@ -253,10 +482,16 @@ class TimmModel(nn.Module):
         model: nn.Module = None,
         byol_ckpt_path: str = None,
         timm_ckpt_path: str = None,
+        finetuned_ckpt_path: str = None,
+        use_hq_images: bool = False,
+        task_number: int = 2,
     ):
         super().__init__()
+        assert task_number == 1 or task_number == 2
         self.model_name = model_name
         self.pretrained = pretrained
+        self.use_hq_images = use_hq_images
+        self.task_number = task_number
         model_state_dict = None
         if byol_ckpt_path is not None:
             ckpt = torch.load(byol_ckpt_path, map_location="cpu")
@@ -265,15 +500,27 @@ class TimmModel(nn.Module):
                 for k, v in ckpt["state_dict"].items()
                 if k.startswith("online_backbone.model.")
             }
+        elif finetuned_ckpt_path is not None:
+            ckpt = torch.load(finetuned_ckpt_path, map_location="cpu")
+            model_state_dict = {
+                k.removeprefix("backbone.models.0.model."): v
+                for k, v in ckpt["state_dict"].items()
+                if k.startswith("backbone.models.0.model.")
+            }
         elif timm_ckpt_path is not None:
             ckpt = torch.load(timm_ckpt_path, map_location="cpu")
             model_state_dict = ckpt["state_dict"]
             cls_name = classifier_name(model_name)
+            classes = (
+                TASK1_IMAGENET64_CLASSES
+                if task_number == 1
+                else TASK2_IMAGENET64_CLASSES
+            )
             model_state_dict[f"{cls_name}.weight"] = model_state_dict[
                 f"{cls_name}.weight"
-            ][IMAGENET64_CLASSES, :]
+            ][classes, :]
             model_state_dict[f"{cls_name}.bias"] = model_state_dict[f"{cls_name}.bias"][
-                IMAGENET64_CLASSES
+                classes
             ]
         if model is not None:
             self.model = model
@@ -298,6 +545,8 @@ class TimmModel(nn.Module):
             model_name=self.model_name,
             pretrained=pretrained if pretrained is not None else self.pretrained,
             model=self._init_timm_model(pretrained),
+            use_hq_images=self.use_hq_images,
+            task_number=self.task_number,
         )
 
     def _init_timm_model(self, pretrained: bool = None):
@@ -311,13 +560,18 @@ class TimmModel(nn.Module):
             **kwargs,
         )
         if pretrained:
+            classes = (
+                TASK1_IMAGENET_CLASSES
+                if self.task_number == 1
+                else TASK2_IMAGENET_CLASSES
+            )
             cls_name = classifier_name(self.model_name)
             model_state_dict = model.state_dict()
             model_state_dict[f"{cls_name}.weight"] = model_state_dict[
                 f"{cls_name}.weight"
-            ][IMAGENET_CLASSES, :]
+            ][classes, :]
             model_state_dict[f"{cls_name}.bias"] = model_state_dict[f"{cls_name}.bias"][
-                IMAGENET_CLASSES
+                classes
             ]
             model = timm.create_model(
                 self.model_name,
@@ -326,8 +580,12 @@ class TimmModel(nn.Module):
             model.load_state_dict(model_state_dict)
         return model
 
-    def forward(self, images):
+    def forward(self, data):
+        images = data["image"] if not self.use_hq_images else data["image_hq"]
         return self.model(images)
+
+    def get_classifier(self):
+        return self.model.get_classifier()
 
 
 def new_metrics_dict():
@@ -371,8 +629,9 @@ def log_metrics(module: pl.LightningModule, key, logits, labels, loss, **kwargs)
 class SupervisedModel(pl.LightningModule):
     def __init__(
         self,
-        backbone: TimmModel,
+        backbone: nn.Module,
         unfreeze_backbone_at_epoch: int = 0,
+        unfreeze_only_ensemble_weights: bool = False,
         warmup_epochs: int = 5,
         lr: float = 0.2,
         momentum: float = 0.9,
@@ -384,8 +643,12 @@ class SupervisedModel(pl.LightningModule):
         self.loss = nn.CrossEntropyLoss()
         self.metrics = new_metrics_dict()
         if unfreeze_backbone_at_epoch > 0:
+            if hasattr(self.backbone, "ensemble_weights"):
+                ensemble_weights_req_grad = self.backbone.ensemble_weights.requires_grad
             freeze(self.backbone)
-            unfreeze(self.backbone.model.get_classifier())
+            unfreeze(self.backbone.get_classifier())
+            if hasattr(self.backbone, "ensemble_weights"):
+                self.backbone.ensemble_weights.requires_grad_(ensemble_weights_req_grad)
             assert unfreeze_backbone_at_epoch > warmup_epochs
         self.test_classes = []
 
@@ -402,8 +665,7 @@ class SupervisedModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         data, labels = batch
-        images = data["image"]
-        logits = self.forward(images)
+        logits = self.forward(data)
         loss = self.loss(logits, labels)
         log_metrics(self, "train_0", logits, labels, loss.detach())
         return loss
@@ -411,16 +673,14 @@ class SupervisedModel(pl.LightningModule):
     @torch.no_grad()
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         data, labels = batch
-        images = data["image"]
-        logits = self.forward(images)
+        logits = self.forward(data)
         loss = self.loss(logits, labels)
         log_metrics(self, f"val_{dataloader_idx}", logits, labels, loss.detach())
 
     @torch.no_grad()
     def test_step(self, batch, batch_idx, dataloader_idx=0):
         data, labels = batch
-        images = data["image"]
-        logits = self.forward(images)
+        logits = self.forward(data)
         classes = torch.argmax(logits, dim=1).to("cpu")
         self.test_classes.append(classes)
 
@@ -440,9 +700,10 @@ class SupervisedModel(pl.LightningModule):
         )
         opt = timm.optim.Lamb(
             params,
-            lr=self.hparams.lr,  # momentum=self.hparams.momentum
+            lr=self.hparams.lr,
+            # momentum=self.hparams.momentum
         )
-        num_steps = 93
+        num_steps = self.trainer.estimated_stepping_batches // self.trainer.max_epochs
         if self.hparams.unfreeze_backbone_at_epoch > 0:
             lp_warmup_lr = torch.optim.lr_scheduler.LinearLR(
                 opt,

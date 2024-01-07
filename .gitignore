@@ -397,3 +397,6 @@ wandb/
 
 output/
 stable-diffusion/
+*.zip
+*.tar
+*.csv
